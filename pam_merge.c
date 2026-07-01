@@ -10,6 +10,11 @@ typedef struct {
 } snp_objs;
 
 typedef struct {
+	ind_data* elems;
+	size_t length;
+} ind_objs;
+
+typedef struct {
 	struct idx_head* ref_idx;
 	struct idx_head* elm_idx;  // come up with better name
 } idx_pair;
@@ -24,6 +29,13 @@ snp_objs init_snp_objs(size_t length) {
 	snps.length = length;
 	snps.elems = (snp_data*)malloc(sizeof(snp_data) * snps.length);
 	return snps;
+}
+
+ind_objs init_ind_objs(size_t length) {
+	ind_objs inds;
+	inds.length = length;
+	inds.elems = (ind_data*)malloc(sizeof(ind_data) * inds.length);
+	return inds;
 }
 
 idx_intersect init_idx_intersect(snp_objs* snps) {
@@ -164,11 +176,29 @@ void make_intersection(idx_intersect* isct) {
 	}
 }
 
-void free_snp_objs(snp_objs* s_objs) {
-	for(size_t i = 0; i < s_objs->length; i++) {
-		free_snp_data(&s_objs->elems[i]);
+ind_data append_ind_objs(ind_objs* inds) {
+	ind_data ind_total = inds->elems[0];
+	for(size_t i = 1; i < inds->length; i++) {
+		ind_data out_buf;
+		append_ind_data(&ind_total, &inds->elems[i], &out_buf);
+		if(i > 1) { free_ind_data(&ind_total); }
+		ind_total = out_buf;
 	}
-	free(s_objs->elems);
+	return ind_total;
+}
+
+void free_snp_objs(snp_objs* snps) {
+	for(size_t i = 0; i < snps->length; i++) {
+		free_snp_data(&snps->elems[i]);
+	}
+	free(snps->elems);
+}
+
+void free_ind_objs(ind_objs* inds) {
+	for(size_t i = 0; i < inds->length; i++) {
+		free_ind_data(&inds->elems[i]);
+	}
+	free(inds->elems);
 }
 
 void free_idx_pair(idx_pair* pair) {
@@ -185,6 +215,7 @@ void free_idx_intersect(idx_intersect* isct) {
 }
 
 int main(int argc, char* argv[]) {
+	/*
 	snp_objs snps = init_snp_objs(argc - 1);
 	for(size_t i = 0; i < snps.length; i++) {
 		snps.elems[i] = read_snp_file(argv[i+1]);
@@ -196,4 +227,14 @@ int main(int argc, char* argv[]) {
 	make_intersection(&isct);
 	free_snp_objs(&snps);
 	free_idx_intersect(&isct);
+	*/
+
+	ind_objs inds = init_ind_objs(argc - 1);
+	for(int i = 1; i < argc; i++) {
+		inds.elems[i-1] = read_ind_file(argv[i]);
+	}
+	ind_data ind_total = append_ind_objs(&inds);
+	write_ind_data(&ind_total, "/dev/stdout");
+	free_ind_data(&ind_total);
+	free_ind_objs(&inds);
 }
