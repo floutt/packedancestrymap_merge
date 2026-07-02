@@ -22,6 +22,7 @@ typedef struct {
 typedef struct {
 	idx_pair** ip;
 	size_t length;
+	bool is_intersected;
 } idx_intersect;
 
 snp_objs init_snp_objs(size_t length) {
@@ -41,6 +42,7 @@ ind_objs init_ind_objs(size_t length) {
 idx_intersect init_idx_intersect(snp_objs* snps) {
 	idx_intersect isct;
 	isct.length = snps->length - 1;
+	isct.is_intersected = false;
 	isct.ip = (idx_pair**)malloc(sizeof(idx_pair*) * isct.length);
 	return isct;
 }
@@ -127,8 +129,10 @@ void make_intersection(idx_intersect* isct) {
 						while(nxt_r) {
 							STAILQ_REMOVE(isct->ip[j]->ref_idx, nxt_r, idx_node, nodes);
 							STAILQ_REMOVE(isct->ip[j]->elm_idx, nxt_e, idx_node, nodes);
-							nxt_r = STAILQ_NEXT(cur_nodes_ref[j], nodes);
-							nxt_e = STAILQ_NEXT(cur_nodes_elm[j], nodes);
+							cur_nodes_ref[j] = nxt_r;
+							cur_nodes_elm[j] = nxt_e;
+							nxt_r = STAILQ_NEXT(nxt_r, nodes);
+							nxt_e = STAILQ_NEXT(nxt_e, nodes);
 							free(cur_nodes_ref[j]);
 							free(cur_nodes_elm[j]);
 						}
@@ -174,6 +178,7 @@ void make_intersection(idx_intersect* isct) {
 			break;
 		}
 	}
+	isct->is_intersected = true;
 }
 
 ind_data append_ind_objs(ind_objs* inds) {
@@ -204,6 +209,8 @@ void free_ind_objs(ind_objs* inds) {
 void free_idx_pair(idx_pair* pair) {
 	free_idx_list(pair->ref_idx);
 	free_idx_list(pair->elm_idx);
+	free(pair->ref_idx);
+	free(pair->elm_idx);
 	free(pair);
 }
 
@@ -214,8 +221,15 @@ void free_idx_intersect(idx_intersect* isct) {
 	free(isct->ip);
 }
 
+short get_snp_data_from_idx_intersect(snp_data* snp_in, snp_data* snp_out, idx_intersect* isct) {
+	if(!isct->is_intersected) {
+		fprintf(stderr, "ERROR: SNP files have not been intersected.");
+		exit(EXIT_FAILURE);
+	}
+	return filter_snp_data(snp_in, snp_out, isct->ip[0]->ref_idx);
+}
+
 int main(int argc, char* argv[]) {
-	/*
 	snp_objs snps = init_snp_objs(argc - 1);
 	for(size_t i = 0; i < snps.length; i++) {
 		snps.elems[i] = read_snp_file(argv[i+1]);
@@ -225,10 +239,14 @@ int main(int argc, char* argv[]) {
 		isct.ip[i] = get_idx_pair(&snps.elems[0], &snps.elems[i+1]);
 	}
 	make_intersection(&isct);
+	snp_data snp_ref;
+	get_snp_data_from_idx_intersect(&snps.elems[0], &snp_ref, &isct);
 	free_snp_objs(&snps);
 	free_idx_intersect(&isct);
-	*/
-
+	write_snp_data(&snp_ref, "/dev/stdout");
+	free_snp_data(&snp_ref);
+	
+	/*
 	ind_objs inds = init_ind_objs(argc - 1);
 	for(int i = 1; i < argc; i++) {
 		inds.elems[i-1] = read_ind_file(argv[i]);
@@ -237,4 +255,5 @@ int main(int argc, char* argv[]) {
 	write_ind_data(&ind_total, "/dev/stdout");
 	free_ind_data(&ind_total);
 	free_ind_objs(&inds);
+	*/
 }
