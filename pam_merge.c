@@ -15,6 +15,11 @@ typedef struct {
 } ind_objs;
 
 typedef struct {
+	pam_file_reader* elems;
+	size_t length;
+} pam_objs;
+
+typedef struct {
 	struct idx_head* ref_idx;
 	struct idx_head* elm_idx;  // come up with better name
 } idx_pair;
@@ -24,6 +29,11 @@ typedef struct {
 	size_t length;
 	bool is_intersected;
 } idx_intersect;
+
+typedef struct {
+	snp_data snp_ref;
+	snp_objs snps_aux;
+} snp_intersect;
 
 snp_objs init_snp_objs(size_t length) {
 	snp_objs snps;
@@ -221,6 +231,11 @@ void free_idx_intersect(idx_intersect* isct) {
 	free(isct->ip);
 }
 
+void free_snp_intersect(snp_intersect* snp_isct) {
+	free_snp_data(&snp_isct->snp_ref);
+	free_snp_objs(&snp_isct->snps_aux);
+}
+
 short get_snp_data_from_idx_intersect(snp_data* snp_in, snp_data* snp_out, idx_intersect* isct) {
 	if(!isct->is_intersected) {
 		fprintf(stderr, "ERROR: SNP files have not been intersected.");
@@ -229,22 +244,41 @@ short get_snp_data_from_idx_intersect(snp_data* snp_in, snp_data* snp_out, idx_i
 	return filter_snp_data(snp_in, snp_out, isct->ip[0]->ref_idx);
 }
 
+
+// switch to a generic method return snp_objs
+snp_intersect get_snp_intersect(snp_objs* snps) {
+	idx_intersect isct = init_idx_intersect(snps);
+	for(size_t i = 0; i < isct.length; i++) {
+		isct.ip[i] = get_idx_pair(&snps->elems[0], &snps->elems[i+1]);
+	}
+	make_intersection(&isct);
+	snp_intersect si_out;
+	si_out.snps_aux = init_snp_objs(snps->length - 1);
+	filter_snp_data(&snps->elems[0], &si_out.snp_ref, isct.ip[0]->ref_idx);
+	for(size_t i = 0; i < si_out.snps_aux.length; i++) {
+		filter_snp_data(&snps->elems[i+1], &si_out.snps_aux.elems[i], isct.ip[i]->elm_idx);
+	}
+	free_idx_intersect(&isct);
+	return si_out;
+}
+
+void master_merge(snp_objs* snps, ind_objs* inds, pam_file_writer* paw) {
+	snp_data ref_snp = snps->elems[0];
+	ind_data ind_total = append_ind_objs(inds);
+	for(size_t i = 0; i < ref_snp.length; i++) {
+		uint8_t* record = (uint8_t*)malloc(sizeof(uint8_t) * ind_total.length);
+
+	}
+}
 int main(int argc, char* argv[]) {
 	snp_objs snps = init_snp_objs(argc - 1);
 	for(size_t i = 0; i < snps.length; i++) {
 		snps.elems[i] = read_snp_file(argv[i+1]);
 	}
-	idx_intersect isct = init_idx_intersect(&snps);
-	for(size_t i = 0; i < isct.length; i++) {
-		isct.ip[i] = get_idx_pair(&snps.elems[0], &snps.elems[i+1]);
-	}
-	make_intersection(&isct);
-	snp_data snp_ref;
-	get_snp_data_from_idx_intersect(&snps.elems[0], &snp_ref, &isct);
+
+	snp_intersect s_i = get_snp_intersect(&snps);
+	free_snp_intersect(&s_i);
 	free_snp_objs(&snps);
-	free_idx_intersect(&isct);
-	write_snp_data(&snp_ref, "/dev/stdout");
-	free_snp_data(&snp_ref);
 	
 	/*
 	ind_objs inds = init_ind_objs(argc - 1);
