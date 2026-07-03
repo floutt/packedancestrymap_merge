@@ -4,6 +4,10 @@
 #include <stdbool.h>
 #include <dotgeno.h>
 
+#define PAM_STR_BUF_EXTRA 6
+
+bool HASH_CHECK = true;
+
 typedef struct {
 	snp_data* elems;
 	size_t length;
@@ -266,22 +270,44 @@ snp_objs filter_snp_objs(snp_objs* snps) {
 	return s_out;
 }
 
-void master_merge(pam_objs* pams, snp_objs* snps, ind_objs* inds, pam_file_writer* paw) {
+void master_merge(pam_objs* pams, snp_objs* snps, ind_objs* inds, char* out_prefix) {
 	snp_data snp_ref = snps->elems[0];
 	ind_data ind_total = append_ind_objs(inds);
+	char* buf = (char*)malloc(sizeof(char) * (strlen(out_prefix) + PAM_STR_BUF_EXTRA));
+	sprintf(buf, "%s.snp", out_prefix);
+	write_snp_data(&snp_ref, buf);
+	sprintf(buf, "%s.ind", out_prefix);
+	write_ind_data(&ind_total, buf);
+	sprintf(buf, "%s.geno", out_prefix);	
+	pam_file_writer paw = pam_file_writer_init(buf, &snp_ref, &ind_total);
+	free(buf);
 	if(!(pams->length == snps->length) && (snps->length == inds->length)) {
 		fprintf(stderr, "ERROR: inconsistent lengths for pams, snps, and inds.\n");
 		exit(EXIT_FAILURE);
 	}
-	if(!paw->is_open) {
+	if(!paw.is_open) {
 		fprintf(stderr, "ERROR: cannot merge closed pam_file_writer.\n");
 		exit(EXIT_FAILURE);
 	}
-	if(paw->hdr_written) {
+	if(paw.hdr_written) {
 		fprintf(stderr, "ERROR: header of PACKEDANCESTRYMAP already written.\n");
 		exit(EXIT_FAILURE);
 	}
-	write_pam_header(paw, &snp_ref, &ind_total);
+	// read pam headers and check hashes if specified
+	for(size_t i = 0; i < pams->length; i++) {
+		hdr_data hdr = read_pam_header(&pams->elems[i]);
+		if(!HASH_CHECK) { continue; }
+		if(hdr.ind_hash != inds->elems[i].hash) {
+			fprintf(stderr, "Incorrect hash in one of the ind files. ind file may have been modiied after PACKEDANCESTRYMAP file creation.\n");
+			exit(EXIT_FAILURE);
+		}
+		if(hdr.snp_hash != snps->elems[i].hash) {
+			fprintf(stderr, "Incorrect hash in one of the snp files. snp file may have been modiied after PACKEDANCESTRYMAP file creation.\n");
+			exit(EXIT_FAILURE);
+		}
+	}
+
+	write_pam_header(&paw, &snp_ref, &ind_total);
 	for(size_t i = 0; i < snp_ref.length; i++) {
 		uint8_t* record = (uint8_t*)malloc(sizeof(uint8_t) * ind_total.length);
 		size_t adder = 0;
@@ -292,17 +318,21 @@ void master_merge(pam_objs* pams, snp_objs* snps, ind_objs* inds, pam_file_write
 				uint8_t* rcd = read_pam_record(&pams->elems[j]);
 				for(size_t k = 0; k < inds->elems[j].length; k++) {
 					record[k + adder] = rcd[k];
-					adder += inds->elems[j].length;
 				}
+				adder += inds->elems[j].length;
 				free(rcd);
 			} else if(ret == -1) {
 				for(size_t k = 0; k < inds->elems[j].length; k++) {
 					record[k + adder] = NAN_VAL;
-					adder += inds->elems[j].length;
 				}
+				adder += inds->elems[j].length;
 			}
 		}
+		write_pam_record(&paw, record);
+		free(record);
 	}
+	close_pam_file_writer(&paw);
+	free_ind_data(&ind_total);
 }
 
 int main(int argc, char* argv[]) {
@@ -310,32 +340,17 @@ int main(int argc, char* argv[]) {
 	ind_objs inds = init_ind_objs(argc - 1);
 	pam_objs pams = init_pam_objs(argc - 1);
 	for(size_t i = 0; i < snps.length; i++) {
-		char* buf = (char*)malloc(sizeof(char) * (strlen(argv[i+1]) + 6));
+		char* buf = (char*)malloc(sizeof(char) * (strlen(argv[i+1]) + PAM_STR_BUF_EXTRA));
 		sprintf(buf, "%s.snp", argv[i+1]);
 		snps.elems[i] = read_snp_file(buf);
 		sprintf(buf, "%s.ind", argv[i+1]);
 		inds.elems[i] = read_ind_file(buf);
 		sprintf(buf, "%s.geno", argv[i+1]);
 		pams.elems[i] = pam_file_reader_init(buf, &snps.elems[i], &inds.elems[i]);
+		free(buf);
 	}
-	
+	master_merge(&pams, &snps, &inds, "out_test");
 	free_snp_objs(&snps);
 	free_ind_objs(&inds);
 	free_pam_objs(&pams);
-	/*
-	snp_objs snps_filtered = filter_snp_objs(&snps);
-	free_snp_objs(&snps_filtered);
-	free_snp_objs(&snps);
-	*/
-
-	/*
-	ind_objs inds = init_ind_objs(argc - 1);
-	for(int i = 1; i < argc; i++) {
-		inds.elems[i-1] = read_ind_file(argv[i]);
-	}
-	ind_data ind_total = append_ind_objs(&inds);
-	write_ind_data(&ind_total, "/dev/stdout");
-	free_ind_data(&ind_total);
-	free_ind_objs(&inds);
-	*/
 }
