@@ -34,6 +34,12 @@ typedef struct {
 	bool is_intersected;
 } idx_intersect;
 
+typedef enum {
+	MATCH,
+	FLIP,
+	MISMATCH
+} snp_cmp_res;
+
 snp_objs init_snp_objs(size_t length) {
 	snp_objs snps;
 	snps.length = length;
@@ -270,7 +276,18 @@ snp_objs filter_snp_objs(snp_objs* snps) {
 	return s_out;
 }
 
-void master_merge(pam_objs* pams, snp_objs* snps, ind_objs* inds, char* out_prefix) {
+snp_cmp_res snp_cmp(snp_data* snp1, snp_data* snp2, size_t idx1, size_t idx2) {
+	if((strcmp(snp1->ref[idx1], snp2->ref[idx2]) == 0) && (strcmp(snp1->alt[idx1], snp2->alt[idx2]) == 0)) {
+		return MATCH; 
+	} else if((strcmp(snp1->ref[idx1], snp2->alt[idx2]) == 0) && (strcmp(snp1->alt[idx1], snp2->ref[idx2]) == 0)) {
+		return FLIP;
+	}
+	else {
+		return MISMATCH;
+	}
+}
+
+void write_combined_pam(pam_objs* pams, snp_objs* snps, ind_objs* inds, char* out_prefix) {
 	snp_data snp_ref = snps->elems[0];
 	ind_data ind_total = append_ind_objs(inds);
 	char* buf = (char*)malloc(sizeof(char) * (strlen(out_prefix) + PAM_STR_BUF_EXTRA));
@@ -314,19 +331,31 @@ void master_merge(pam_objs* pams, snp_objs* snps, ind_objs* inds, char* out_pref
 		for(size_t j = 0; j < pams->length; j++) {
 			short ret = goto_var_pam(&pams->elems[j], &snps->elems[j], snp_ref.var_id[i]);
 			if(ret == 0) {
-				// TODO: check for SNP flips, mismatches, etc.
+				snp_cmp_res cmp_res = snp_cmp(&snp_ref, &snps->elems[j], i, pams->elems[j].idx);
 				uint8_t* rcd = read_pam_record(&pams->elems[j]);
-				for(size_t k = 0; k < inds->elems[j].length; k++) {
-					record[k + adder] = rcd[k];
+				switch (cmp_res) {
+					case MATCH:
+						for(size_t k = 0; k < inds->elems[j].length; k++) {
+							record[k + adder] = rcd[k];
+						}
+						break;
+					case FLIP:
+						for(size_t k = 0; k < inds->elems[j].length; k++) {
+							record[k + adder] = ((rcd[k] != NAN_VAL)*(2-rcd[k])) + ((rcd[k] == NAN_VAL)*NAN_VAL);
+						}
+						break;
+					case MISMATCH:
+						for(size_t k = 0; k < inds->elems[j].length; k++) {
+							record[k + adder] = NAN_VAL;
+						}
 				}
-				adder += inds->elems[j].length;
 				free(rcd);
 			} else if(ret == -1) {
 				for(size_t k = 0; k < inds->elems[j].length; k++) {
 					record[k + adder] = NAN_VAL;
 				}
-				adder += inds->elems[j].length;
 			}
+			adder += inds->elems[j].length;
 		}
 		write_pam_record(&paw, record);
 		free(record);
@@ -349,7 +378,7 @@ int main(int argc, char* argv[]) {
 		pams.elems[i] = pam_file_reader_init(buf, &snps.elems[i], &inds.elems[i]);
 		free(buf);
 	}
-	master_merge(&pams, &snps, &inds, "out_test");
+	write_combined_pam(&pams, &snps, &inds, "out_test");
 	free_snp_objs(&snps);
 	free_ind_objs(&inds);
 	free_pam_objs(&pams);
