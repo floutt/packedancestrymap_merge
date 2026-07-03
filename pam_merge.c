@@ -30,11 +30,6 @@ typedef struct {
 	bool is_intersected;
 } idx_intersect;
 
-typedef struct {
-	snp_data snp_ref;
-	snp_objs snps_aux;
-} snp_intersect;
-
 snp_objs init_snp_objs(size_t length) {
 	snp_objs snps;
 	snps.length = length;
@@ -47,6 +42,13 @@ ind_objs init_ind_objs(size_t length) {
 	inds.length = length;
 	inds.elems = (ind_data*)malloc(sizeof(ind_data) * inds.length);
 	return inds;
+}
+
+pam_objs init_pam_objs(size_t length) {
+	pam_objs pams;
+	pams.length = length;
+	pams.elems = (pam_file_reader*)malloc(sizeof(pam_file_reader) * pams.length);
+	return pams;
 }
 
 idx_intersect init_idx_intersect(snp_objs* snps) {
@@ -216,6 +218,13 @@ void free_ind_objs(ind_objs* inds) {
 	free(inds->elems);
 }
 
+void free_pam_objs(pam_objs* pams) {
+	for(size_t i = 0; i < pams->length; i++) {
+		close_pam_file_reader(&pams->elems[i]);
+	}
+	free(pams->elems);
+}
+
 void free_idx_pair(idx_pair* pair) {
 	free_idx_list(pair->ref_idx);
 	free_idx_list(pair->elm_idx);
@@ -231,11 +240,6 @@ void free_idx_intersect(idx_intersect* isct) {
 	free(isct->ip);
 }
 
-void free_snp_intersect(snp_intersect* snp_isct) {
-	free_snp_data(&snp_isct->snp_ref);
-	free_snp_objs(&snp_isct->snps_aux);
-}
-
 short get_snp_data_from_idx_intersect(snp_data* snp_in, snp_data* snp_out, idx_intersect* isct) {
 	if(!isct->is_intersected) {
 		fprintf(stderr, "ERROR: SNP files have not been intersected.");
@@ -246,40 +250,84 @@ short get_snp_data_from_idx_intersect(snp_data* snp_in, snp_data* snp_out, idx_i
 
 
 // switch to a generic method return snp_objs
-snp_intersect get_snp_intersect(snp_objs* snps) {
+snp_objs filter_snp_objs(snp_objs* snps) {
 	idx_intersect isct = init_idx_intersect(snps);
 	for(size_t i = 0; i < isct.length; i++) {
 		isct.ip[i] = get_idx_pair(&snps->elems[0], &snps->elems[i+1]);
 	}
 	make_intersection(&isct);
-	snp_intersect si_out;
-	si_out.snps_aux = init_snp_objs(snps->length - 1);
-	filter_snp_data(&snps->elems[0], &si_out.snp_ref, isct.ip[0]->ref_idx);
-	for(size_t i = 0; i < si_out.snps_aux.length; i++) {
-		filter_snp_data(&snps->elems[i+1], &si_out.snps_aux.elems[i], isct.ip[i]->elm_idx);
+	snp_objs s_out;
+	s_out = init_snp_objs(snps->length);
+	filter_snp_data(&snps->elems[0], &s_out.elems[0], isct.ip[0]->ref_idx);
+	for(size_t i = 1; i < s_out.length; i++) {
+		filter_snp_data(&snps->elems[i], &s_out.elems[i], isct.ip[i-1]->elm_idx);
 	}
 	free_idx_intersect(&isct);
-	return si_out;
+	return s_out;
 }
 
-void master_merge(snp_objs* snps, ind_objs* inds, pam_file_writer* paw) {
-	snp_data ref_snp = snps->elems[0];
+void master_merge(pam_objs* pams, snp_objs* snps, ind_objs* inds, pam_file_writer* paw) {
+	snp_data snp_ref = snps->elems[0];
 	ind_data ind_total = append_ind_objs(inds);
-	for(size_t i = 0; i < ref_snp.length; i++) {
+	if(!(pams->length == snps->length) && (snps->length == inds->length)) {
+		fprintf(stderr, "ERROR: inconsistent lengths for pams, snps, and inds.\n");
+		exit(EXIT_FAILURE);
+	}
+	if(!paw->is_open) {
+		fprintf(stderr, "ERROR: cannot merge closed pam_file_writer.\n");
+		exit(EXIT_FAILURE);
+	}
+	if(paw->hdr_written) {
+		fprintf(stderr, "ERROR: header of PACKEDANCESTRYMAP already written.\n");
+		exit(EXIT_FAILURE);
+	}
+	write_pam_header(paw, &snp_ref, &ind_total);
+	for(size_t i = 0; i < snp_ref.length; i++) {
 		uint8_t* record = (uint8_t*)malloc(sizeof(uint8_t) * ind_total.length);
-
+		size_t adder = 0;
+		for(size_t j = 0; j < pams->length; j++) {
+			short ret = goto_var_pam(&pams->elems[j], &snps->elems[j], snp_ref.var_id[i]);
+			if(ret == 0) {
+				// TODO: check for SNP flips, mismatches, etc.
+				uint8_t* rcd = read_pam_record(&pams->elems[j]);
+				for(size_t k = 0; k < inds->elems[j].length; k++) {
+					record[k + adder] = rcd[k];
+					adder += inds->elems[j].length;
+				}
+				free(rcd);
+			} else if(ret == -1) {
+				for(size_t k = 0; k < inds->elems[j].length; k++) {
+					record[k + adder] = NAN_VAL;
+					adder += inds->elems[j].length;
+				}
+			}
+		}
 	}
 }
+
 int main(int argc, char* argv[]) {
 	snp_objs snps = init_snp_objs(argc - 1);
+	ind_objs inds = init_ind_objs(argc - 1);
+	pam_objs pams = init_pam_objs(argc - 1);
 	for(size_t i = 0; i < snps.length; i++) {
-		snps.elems[i] = read_snp_file(argv[i+1]);
+		char* buf = (char*)malloc(sizeof(char) * (strlen(argv[i+1]) + 6));
+		sprintf(buf, "%s.snp", argv[i+1]);
+		snps.elems[i] = read_snp_file(buf);
+		sprintf(buf, "%s.ind", argv[i+1]);
+		inds.elems[i] = read_ind_file(buf);
+		sprintf(buf, "%s.geno", argv[i+1]);
+		pams.elems[i] = pam_file_reader_init(buf, &snps.elems[i], &inds.elems[i]);
 	}
-
-	snp_intersect s_i = get_snp_intersect(&snps);
-	free_snp_intersect(&s_i);
-	free_snp_objs(&snps);
 	
+	free_snp_objs(&snps);
+	free_ind_objs(&inds);
+	free_pam_objs(&pams);
+	/*
+	snp_objs snps_filtered = filter_snp_objs(&snps);
+	free_snp_objs(&snps_filtered);
+	free_snp_objs(&snps);
+	*/
+
 	/*
 	ind_objs inds = init_ind_objs(argc - 1);
 	for(int i = 1; i < argc; i++) {
