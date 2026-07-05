@@ -1,12 +1,15 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/queue.h>
 #include <stdbool.h>
+#include <getopt.h>
+#include <sys/queue.h>
 #include <dotgeno.h>
 
 #define PAM_STR_BUF_EXTRA 6
 
+// important global variables
 bool HASH_CHECK = true;
+bool IS_VERBOSE = false;
 
 typedef struct {
 	snp_data* elems;
@@ -39,6 +42,13 @@ typedef enum {
 	FLIP,
 	MISMATCH
 } snp_cmp_res;
+
+typedef struct {
+	char** snp;
+	char** ind;
+	char** pam;
+	size_t length;
+} combined_files;
 
 snp_objs init_snp_objs(size_t length) {
 	snp_objs snps;
@@ -364,7 +374,212 @@ void write_combined_pam(pam_objs* pams, snp_objs* snps, ind_objs* inds, char* ou
 	free_ind_data(&ind_total);
 }
 
+char** get_comma_separated_values(char* str, size_t* n_chars) {
+	size_t str_len = strlen(str);
+	size_t nc_buf = str_len > 0;
+	// get num chars
+	for(size_t i = 0; i < str_len; i++) {
+		if(str[i] == ',') {
+			nc_buf += 1;
+		}
+	}
+	size_t* col_lens = (size_t*)malloc(nc_buf * sizeof(size_t)); 
+	size_t cur_len = 0;
+	size_t cur_col = 0;
+	for(size_t i = 0; i < str_len; i++) {
+		if(!(str[i] == ',')) {
+			cur_len += 1;
+		} else {
+			col_lens[cur_col] = cur_len;
+			cur_len = 0;
+			cur_col += 1;
+		}
+	}
+	col_lens[cur_col] = cur_len;
+	char** out_arr = (char**)malloc(nc_buf * sizeof(char*));
+	for(size_t i = 0; i < nc_buf; i++) {
+		out_arr[i] = (char*)malloc((col_lens[i] + 1) * sizeof(char));
+		out_arr[i][col_lens[i]] = '\0';
+	}
+	size_t subber = 0;
+	cur_col = 0;
+	for(size_t i = 0; i < str_len; i++) {
+		if((str[i] == ',')) {
+			cur_col += 1;
+			subber = i + 1;
+		} else {
+			out_arr[cur_col][i - subber] = str[i];
+		}
+	}
+	free(col_lens);
+	*n_chars = nc_buf;
+	return out_arr;
+}
+
+void free_gsf(char** arr, size_t len) {
+	for(size_t i = 0; i < len; i++) {
+		free(arr[i]);
+	}
+	free(arr);
+}
+
+void free_combined_files(combined_files* file_info) {
+	free_gsf(file_info->snp, file_info->length);
+	free_gsf(file_info->ind, file_info->length);
+	free_gsf(file_info->pam, file_info->length);
+}
+
+void print_help() {
+	printf("Future help message here\n");
+}
+
 int main(int argc, char* argv[]) {
+	bool intersect_snps = false;
+	combined_files file_info;
+	file_info.length = 0;
+	file_info.snp = NULL;
+	file_info.ind = NULL;
+	file_info.pam = NULL;
+	char* out_prefix = NULL;
+
+	static struct option long_options[] = {
+		{"help",           no_argument,       NULL, 'h'},
+		{"prefixes",       required_argument, NULL, 'p'},
+		{"pams",           required_argument, NULL, 'P'},
+		{"snps",           required_argument, NULL, 's'},
+		{"inds",           required_argument, NULL, 'i'},
+		{"out",            required_argument, NULL, 'o'},
+		{"ignore-hash",    no_argument,       0,    300},
+		{"intersect-snps", no_argument,       0,    400},
+		{"verbose",        no_argument,       0,    500},
+		{0,                0,                 0,      0}
+	};
+
+	while(1) {
+		int c = getopt_long(argc, argv, "hp:P:s:i:o:", long_options, NULL);
+		if(c == -1) { break; }
+		size_t n;
+		char** gsf;
+		switch(c) {
+			case 'h':
+				print_help();
+				exit(EXIT_SUCCESS);
+			case 'p':
+				if(file_info.pam) {
+					fprintf(stderr, "ERROR: PACKEDANCESTRYMAP files already provided!");
+					exit(EXIT_FAILURE);
+				}
+				if(file_info.snp) {
+					fprintf(stderr, "ERROR: SNP files already provided!");
+					exit(EXIT_FAILURE);
+				}
+				if(file_info.ind) {
+					fprintf(stderr, "ERROR: Individual files already provided!");
+					exit(EXIT_FAILURE);
+				}
+				gsf =  get_comma_separated_values(optarg, &n);
+				file_info.length = n;
+				file_info.snp = (char**)malloc(sizeof(char*) * file_info.length);
+				file_info.ind = (char**)malloc(sizeof(char*) * file_info.length);
+				file_info.pam = (char**)malloc(sizeof(char*) * file_info.length);
+				for(size_t i = 0; i < file_info.length; i++) {
+					char* str_snp = (char*)malloc(sizeof(char) * (strlen(gsf[i]) + PAM_STR_BUF_EXTRA));
+					char* str_ind = (char*)malloc(sizeof(char) * (strlen(gsf[i]) + PAM_STR_BUF_EXTRA));
+					char* str_pam = (char*)malloc(sizeof(char) * (strlen(gsf[i]) + PAM_STR_BUF_EXTRA));
+					sprintf(str_snp, "%s.snp", gsf[i]);
+					sprintf(str_ind, "%s.ind", gsf[i]);
+					sprintf(str_pam, "%s.geno", gsf[i]);
+					file_info.snp[i] = str_snp;
+					file_info.ind[i] = str_ind;
+					file_info.pam[i] = str_pam;
+				}
+				free_gsf(gsf, n);
+				break;
+			case 'P':
+				if(file_info.pam) {
+					fprintf(stderr, "ERROR: Multiple sets of PACKEDANCESTRYMAP files provided!\n");
+					exit(EXIT_FAILURE);
+				}
+				gsf =  get_comma_separated_values(optarg, &n);
+				if(file_info.length == 0) {
+					file_info.length = n;
+				} else {
+					if(n != file_info.length) {
+						fprintf(stderr, "ERROR: Incompatible number of PACKEDANCESTRYMAP files and SNP and/or individual files!\n");
+						exit(EXIT_FAILURE);
+					}
+				}
+				file_info.pam = gsf;
+				break;
+			case 's':
+				if(file_info.ind) {
+					fprintf(stderr, "ERROR: Multiple sets of PACKEDANCESTRYMAP files provided!\n");
+					exit(EXIT_FAILURE);
+				}
+				gsf =  get_comma_separated_values(optarg, &n);
+				if(file_info.length == 0) {
+					file_info.length = n;
+				} else {
+					if(n != file_info.length) {
+						fprintf(stderr, "ERROR: Incompatible number of individual files and PACKEDANCESTRYMAP and/or SNP files!\n");
+						exit(EXIT_FAILURE);
+					}
+				}
+				file_info.ind = gsf;
+				break;
+			case 'i':
+				if(file_info.snp) {
+					fprintf(stderr, "ERROR: Multiple sets of PACKEDANCESTRYMAP files provided!\n");
+					exit(EXIT_FAILURE);
+				}
+				gsf =  get_comma_separated_values(optarg, &n);
+				if(file_info.length == 0) {
+					file_info.length = n;
+				} else {
+					if(n != file_info.length) {
+						fprintf(stderr, "ERROR: Incompatible number of SNP files and PACKEDANCESTRYMAP and/or individual files!\n");
+						exit(EXIT_FAILURE);
+					}
+				}
+				file_info.snp = gsf;
+				break;
+			case 'o':
+				if(out_prefix) {
+					fprintf(stderr, "ERROR: output prefix of '%s' has already been specified!\n", out_prefix);
+					exit(EXIT_FAILURE);
+				} else {
+					out_prefix = optarg;
+				}
+				break;
+			case 300:
+				HASH_CHECK = false;
+				break;
+			case 400:
+				intersect_snps = true;
+				break;
+			case 500:
+				IS_VERBOSE = true;
+				break;
+			case '?':
+				break;
+			default:
+				abort();
+		}
+	}
+
+	if(file_info.length == 0) {
+		fprintf(stderr, "ERROR: no input files provided!\n");
+		exit(EXIT_FAILURE);
+	}
+
+	if(out_prefix == NULL) {
+		fprintf(stderr, "ERROR: no output file prefix provided!\n");
+		exit(EXIT_FAILURE);
+	}
+
+	// ADD MORE STUFF HERE 
+	free_combined_files(&file_info);
+	/*
 	snp_objs snps = init_snp_objs(argc - 1);
 	ind_objs inds = init_ind_objs(argc - 1);
 	pam_objs pams = init_pam_objs(argc - 1);
@@ -382,4 +597,5 @@ int main(int argc, char* argv[]) {
 	free_snp_objs(&snps);
 	free_ind_objs(&inds);
 	free_pam_objs(&pams);
+	*/
 }
