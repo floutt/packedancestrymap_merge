@@ -270,7 +270,7 @@ short get_snp_data_from_idx_intersect(snp_data* snp_in, snp_data* snp_out, idx_i
 
 
 // switch to a generic method return snp_objs
-snp_objs filter_snp_objs(snp_objs* snps) {
+snp_objs intersect_snp_objs(snp_objs* snps) {
 	idx_intersect isct = init_idx_intersect(snps);
 	for(size_t i = 0; i < isct.length; i++) {
 		isct.ip[i] = get_idx_pair(&snps->elems[0], &snps->elems[i+1]);
@@ -297,7 +297,7 @@ snp_cmp_res snp_cmp(snp_data* snp1, snp_data* snp2, size_t idx1, size_t idx2) {
 	}
 }
 
-void write_combined_pam(pam_objs* pams, snp_objs* snps, ind_objs* inds, char* out_prefix) {
+void write_combined_pam(pam_objs* pams, snp_objs* snps, ind_objs* inds, combined_files* file_info, char* out_prefix) {
 	snp_data snp_ref = snps->elems[0];
 	ind_data ind_total = append_ind_objs(inds);
 	char* buf = (char*)malloc(sizeof(char) * (strlen(out_prefix) + PAM_STR_BUF_EXTRA));
@@ -325,11 +325,11 @@ void write_combined_pam(pam_objs* pams, snp_objs* snps, ind_objs* inds, char* ou
 		hdr_data hdr = read_pam_header(&pams->elems[i]);
 		if(!HASH_CHECK) { continue; }
 		if(hdr.ind_hash != inds->elems[i].hash) {
-			fprintf(stderr, "Incorrect hash in one of the ind files. ind file may have been modiied after PACKEDANCESTRYMAP file creation.\n");
+			fprintf(stderr, "Incorrect hash in one of the ind files. ind file might have been modiied after PACKEDANCESTRYMAP file creation.\n");
 			exit(EXIT_FAILURE);
 		}
 		if(hdr.snp_hash != snps->elems[i].hash) {
-			fprintf(stderr, "Incorrect hash in one of the snp files. snp file may have been modiied after PACKEDANCESTRYMAP file creation.\n");
+			fprintf(stderr, "Incorrect hash in one of the snp files. snp file might have been modiied after PACKEDANCESTRYMAP file creation.\n");
 			exit(EXIT_FAILURE);
 		}
 	}
@@ -350,11 +350,19 @@ void write_combined_pam(pam_objs* pams, snp_objs* snps, ind_objs* inds, char* ou
 						}
 						break;
 					case FLIP:
+						if(IS_VERBOSE) {
+							printf("ALLELE FLIP detected in variant %s in file %s. Dosage values will be flipped to match file %s!\n",
+									snp_ref.var_id[i], file_info->snp[j], file_info->snp[0]);
+						}
 						for(size_t k = 0; k < inds->elems[j].length; k++) {
 							record[k + adder] = ((rcd[k] != NAN_VAL)*(2-rcd[k])) + ((rcd[k] == NAN_VAL)*NAN_VAL);
 						}
 						break;
 					case MISMATCH:
+						if(IS_VERBOSE) {
+							printf("ALLELE MISMATCH detected in variant %s in file %s. This variant will be nullified for these samples. Ref and/or alt does not match file %s!\n",
+									snp_ref.var_id[i], file_info->snp[j], file_info->snp[0]);
+						}
 						for(size_t k = 0; k < inds->elems[j].length; k++) {
 							record[k + adder] = NAN_VAL;
 						}
@@ -512,7 +520,7 @@ int main(int argc, char* argv[]) {
 				file_info.pam = gsf;
 				break;
 			case 's':
-				if(file_info.ind) {
+				if(file_info.snp) {
 					fprintf(stderr, "ERROR: Multiple sets of PACKEDANCESTRYMAP files provided!\n");
 					exit(EXIT_FAILURE);
 				}
@@ -525,10 +533,10 @@ int main(int argc, char* argv[]) {
 						exit(EXIT_FAILURE);
 					}
 				}
-				file_info.ind = gsf;
+				file_info.snp = gsf;
 				break;
 			case 'i':
-				if(file_info.snp) {
+				if(file_info.ind) {
 					fprintf(stderr, "ERROR: Multiple sets of PACKEDANCESTRYMAP files provided!\n");
 					exit(EXIT_FAILURE);
 				}
@@ -541,7 +549,7 @@ int main(int argc, char* argv[]) {
 						exit(EXIT_FAILURE);
 					}
 				}
-				file_info.snp = gsf;
+				file_info.ind = gsf;
 				break;
 			case 'o':
 				if(out_prefix) {
@@ -570,6 +578,24 @@ int main(int argc, char* argv[]) {
 	if(file_info.length == 0) {
 		fprintf(stderr, "ERROR: no input files provided!\n");
 		exit(EXIT_FAILURE);
+	} else if(file_info.length == 1) {
+		fprintf(stderr, "ERROR: only one file provided. Merge process cannot be performed.\n");
+		exit(EXIT_FAILURE);
+	}
+	
+	if(file_info.pam == NULL) {
+		fprintf(stderr, "ERROR: no PACKEDANCESTRYMAP files provided!\n");
+		exit(EXIT_FAILURE);
+	}
+
+	if(file_info.snp == NULL) {
+		fprintf(stderr, "ERROR: no SNP files provided!\n");
+		exit(EXIT_FAILURE);
+	}
+
+	if(file_info.ind == NULL) {
+		fprintf(stderr, "ERROR: no individual files provided!\n");
+		exit(EXIT_FAILURE);
 	}
 
 	if(out_prefix == NULL) {
@@ -577,25 +603,22 @@ int main(int argc, char* argv[]) {
 		exit(EXIT_FAILURE);
 	}
 
-	// ADD MORE STUFF HERE 
-	free_combined_files(&file_info);
-	/*
-	snp_objs snps = init_snp_objs(argc - 1);
-	ind_objs inds = init_ind_objs(argc - 1);
-	pam_objs pams = init_pam_objs(argc - 1);
-	for(size_t i = 0; i < snps.length; i++) {
-		char* buf = (char*)malloc(sizeof(char) * (strlen(argv[i+1]) + PAM_STR_BUF_EXTRA));
-		sprintf(buf, "%s.snp", argv[i+1]);
-		snps.elems[i] = read_snp_file(buf);
-		sprintf(buf, "%s.ind", argv[i+1]);
-		inds.elems[i] = read_ind_file(buf);
-		sprintf(buf, "%s.geno", argv[i+1]);
-		pams.elems[i] = pam_file_reader_init(buf, &snps.elems[i], &inds.elems[i]);
-		free(buf);
+	snp_objs snps = init_snp_objs(file_info.length);
+	ind_objs inds = init_ind_objs(file_info.length);
+	pam_objs pams = init_pam_objs(file_info.length);
+	for(size_t i = 0; i < file_info.length; i++) {
+		snps.elems[i] = read_snp_file(file_info.snp[i]);
+		inds.elems[i] = read_ind_file(file_info.ind[i]);
+		pams.elems[i] = pam_file_reader_init(file_info.pam[i], &snps.elems[i], &inds.elems[i]);
 	}
-	write_combined_pam(&pams, &snps, &inds, "out_test");
+	if(intersect_snps) {
+		snp_objs snp_buf = intersect_snp_objs(&snps);
+		free_snp_objs(&snps);
+		snps = snp_buf;
+	}
+	write_combined_pam(&pams, &snps, &inds, &file_info, out_prefix);
+	free_combined_files(&file_info);
 	free_snp_objs(&snps);
 	free_ind_objs(&inds);
 	free_pam_objs(&pams);
-	*/
 }
