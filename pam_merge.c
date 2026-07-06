@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <math.h>
 #include <getopt.h>
 #include <sys/queue.h>
 #include <dotgeno.h>
@@ -10,6 +11,25 @@
 // important global variables
 bool HASH_CHECK = true;
 bool IS_VERBOSE = false;
+
+// loading stuff
+void print_progress(char* message, size_t cur, size_t max, size_t len) {
+	float prop = (1.0 * cur)/max;
+	float percent = prop * 100;
+	size_t num_fill = (size_t)roundf(prop * len);
+	size_t num_empty = len - num_fill;
+	printf("%s: [", message);
+	for(size_t i = 0; i <= num_fill; i++) {
+		printf("=");
+	}
+	for(size_t i = 0; i < num_empty; i++) {
+		if(i == 0) { printf(">"); continue; }
+		printf(".");
+	}
+	printf("]%.0f%\r", percent);
+	fflush(stdout);
+	if(cur == max) { printf("\n"); }
+}
 
 typedef struct {
 	snp_data* elems;
@@ -377,6 +397,7 @@ void write_combined_pam(pam_objs* pams, snp_objs* snps, ind_objs* inds, combined
 		}
 		write_pam_record(&paw, record);
 		free(record);
+		print_progress("Writing genotype data", i+1, snp_ref.length, 50); 
 	}
 	close_pam_file_writer(&paw);
 	free_ind_data(&ind_total);
@@ -621,4 +642,5 @@ int main(int argc, char* argv[]) {
 	free_snp_objs(&snps);
 	free_ind_objs(&inds);
 	free_pam_objs(&pams);
+	printf("Done!\n");
 }
